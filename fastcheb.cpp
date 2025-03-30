@@ -26,7 +26,7 @@ using my_float_mp = boost::multiprecision::number<boost::multiprecision::cpp_bin
 
 #include "ChebTools/ChebTools.h"
 
-extern const std::filesystem::path teqp_datapath{ "../teqp_REFPROP10" };
+extern const std::filesystem::path teqp_datapath{ "../externals/CoolProp" };
 extern const std::filesystem::path output_prefix{"../output/"};
 extern const std::filesystem::path check_destination{"../outputcheck/"};
 
