@@ -40,8 +40,15 @@ int main(){
     for (auto const& dir_entry : std::filesystem::directory_iterator{ teqp_datapath / "dev" / "fluids" }){
         if (dir_entry.is_regular_file()) {
             auto fluid = dir_entry.path().stem().string();
+
+            if (dir_entry.path().extension() != ".json") { continue; }
+            if (fluid == "Air") { continue; }
+            if (fluid == "SES36") { continue; }
+
+            //auto outfile_path = output_prefix / (fluid + "_exps.json");
+            //build_superancillaries(fluid, outfile_path);
             
-//            if (!(fluid == "WATER")){ continue; } // Rudimentary filtering for testing purposes
+            // if (!(fluid == "R125")){ continue; } // Uncomment to enable rudimentary filtering for testing purposes
             
             // Skip the .DS_Store file on OSX
             if (fluid == ".DS_Store"){ continue; }
