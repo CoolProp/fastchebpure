@@ -309,10 +309,10 @@ void build_superancillaries(const std::string &fluid, const std::filesystem::pat
     double R = j.at("EOS")[0].at("gas_constant"); // Gas constant being used
 
     double Tcrittrue, rhocrittrue;
-    if (fluid == "NITROGEN"){
+    if (fluid == "NITROGEN" || fluid == "Nitrogen"){
         std::tie(Tcrittrue, rhocrittrue) = solve_pure_critical(model, Tcrit, rhomolarcrit);
     }
-    else if (fluid == "DMC" || fluid == "MXYLENE"){
+    else if (fluid == "DMC" || fluid == "MXYLENE" || fluid == "DimethylCarbonate" || fluid == "MXYLENE"){
         // Need to relax the tolerance a bit because these ones have multiple critical points
         // The temperature is good, but the densities are not. Maybe this is catastrophic truncation?
         std::tie(Tcrittrue, rhocrittrue) = aggressively_solve_pure_critical(model, Tcrit, rhomolarcrit, 1e-5);
