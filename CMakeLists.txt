@@ -1,6 +1,14 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.14)
 project(fastcheb)
 set(CMAKE_CXX_STANDARD 20)
+
+include(FetchContent)
+FetchContent_Declare(
+    CLI11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG        v2.4.2
+)
+FetchContent_MakeAvailable(CLI11)
 
 set(TEQP_DISABLED_FACTORIES "CPA,SAFTVRMIE,GENERICSAFT,SQUAREWELL,EXP6,2CLJF,MIE,MULTIFLUIDACTIVITY,PCSAFT,GERG200X,MULTIFLUIDASSOCIATION,LKP,ECSHUBERELY1994,AMMONIAWATERTILLNERROTH,  ADVANCEDMIXCUBIC,SOFTSAFT" CACHE STRING "Disable some unused models")
 add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/externals/teqp")
@@ -9,7 +17,7 @@ set(CHEBTOOLS_STATIC_LIBRARY true CACHE INTERNAL "Build ChebTools as a static li
 add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/externals/ChebTools")
 
 add_executable(fitcheb fastcheb.cpp main.cpp)
-target_link_libraries(fitcheb teqpinterface ChebTools teqpcpp)
+target_link_libraries(fitcheb teqpinterface ChebTools teqpcpp CLI11::CLI11)
 target_include_directories(fitcheb
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/externals/teqp/externals/autodiff"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/externals"

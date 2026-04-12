@@ -3,86 +3,174 @@
 #include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <set>
 
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/post.hpp>
 
-// Paths are defined in the actual code
+#include <CLI/CLI.hpp>
+
+// Paths are defined in the actual code (fastcheb.cpp)
 extern const std::filesystem::path teqp_datapath;
 extern const std::filesystem::path output_prefix;
 extern const std::filesystem::path check_destination;
-
-const int FASTCHEB_PROCESSORS = 6;
 
 // Prototype for builder and checker
 void build_superancillaries(const std::string &, const std::filesystem::path &);
 void check_superancillaries(const std::string &, const std::filesystem::path&, const std::filesystem::path&);
 
-int main(){
-    
-    // Check for existence of output locations, they must be present
-    if (!std::filesystem::exists(output_prefix)){
-        std::cout << "output prefix doesn't exist: " << output_prefix << std::endl;
-        return EXIT_FAILURE;
-    }
-    if (!std::filesystem::exists(check_destination)) {
-        std::cout << "output checkfile destination doesn't exist: " << check_destination << std::endl;
-        return EXIT_FAILURE;
-    }
-    if (!std::filesystem::exists(teqp_datapath)) {
-        std::cout << "teqp_datapath doesn't exist: " << teqp_datapath << std::endl;
-        return EXIT_FAILURE;
-    }
+int main(int argc, char** argv){
 
-    // Launch the pool with desired number of threads.
-    boost::asio::thread_pool pool(FASTCHEB_PROCESSORS);
-    
-    for (auto const& dir_entry : std::filesystem::directory_iterator{ teqp_datapath / "dev" / "fluids" }){
-        if (dir_entry.is_regular_file()) {
-            auto fluid = dir_entry.path().stem().string();
+    CLI::App app{
+        "fastchebpure - build and validate Chebyshev superancillary equations\n"
+        "for the saturation properties of pure fluids.",
+        "fitcheb"
+    };
+    app.set_version_flag("--version", "1.0.0");
 
-            if (dir_entry.path().extension() != ".json") { continue; }
-            if (fluid == "Air") { continue; }
-            if (fluid == "SES36") { continue; }
+    // --- Fluid selection ---
+    std::vector<std::string> fluids_arg;
+    app.add_option("-f,--fluid", fluids_arg,
+        "Fluid(s) to process (stem name without .json, e.g. 'Water').\n"
+        "May be specified multiple times. Default: all fluids in the data path.");
 
-            //auto outfile_path = output_prefix / (fluid + "_exps.json");
-            //build_superancillaries(fluid, outfile_path);
-            
-            // if (!(fluid == "R125")){ continue; } // Uncomment to enable rudimentary filtering for testing purposes
-            
-            // Skip the .DS_Store file on OSX
-            if (fluid == ".DS_Store"){ continue; }
-            
-            auto job = [fluid]() {
-                auto outfile_path = output_prefix / (fluid + "_exps.json");
-                auto checkfile_path = check_destination / (fluid + "_check.json");
-                
-                try {
-                    if (!std::filesystem::exists(outfile_path)) {
-                        std::cout << "Building ->: " << outfile_path << std::endl;
-                        build_superancillaries(fluid, outfile_path);
-                    }
-                    if (!std::filesystem::exists(checkfile_path)){
-                        std::cout << "Checking ->: " << checkfile_path << std::endl;
-                        check_superancillaries(fluid, outfile_path, checkfile_path);
-                    }
-                }
-                catch (const std::exception& e) {
-                    std::cout << "[" << fluid << "]: " << e.what() << std::endl;
-                }
-            };
+    // --- Skip list ---
+    std::vector<std::string> skip_arg = {"Air", "SES36"};
+    app.add_option("-s,--skip", skip_arg,
+        "Fluid(s) to skip. Default: Air SES36.")
+        ->capture_default_str();
 
-            if (FASTCHEB_PROCESSORS > 0) {
-                // Submit a lambda object to the pool.
-                std::cout << "Submitting: " << fluid << std::endl;
-                boost::asio::post(pool, job);
-            }
-            else {
-                // Run the job serially
-                job();
-            }
+    // --- Paths ---
+    std::string data_path_arg = teqp_datapath.string();
+    app.add_option("-d,--datapath", data_path_arg,
+        "Path to the CoolProp data directory (must contain dev/fluids/).")
+        ->capture_default_str();
+
+    std::string output_arg = output_prefix.string();
+    app.add_option("-o,--output", output_arg,
+        "Directory for the generated expansion JSON files.")
+        ->capture_default_str();
+
+    std::string check_arg = check_destination.string();
+    app.add_option("-c,--checkdir", check_arg,
+        "Directory for the validation check JSON files.")
+        ->capture_default_str();
+
+    // --- Thread count ---
+    int nthreads = 6;
+    app.add_option("-j,--jobs", nthreads,
+        "Number of parallel worker threads (0 = serial).")
+        ->capture_default_str();
+
+    // --- Mode ---
+    std::string mode = "both";
+    app.add_option("-m,--mode", mode,
+        "Operation mode: 'build', 'check', or 'both' (default).")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"build", "check", "both"}));
+
+    // --- Force rebuild ---
+    bool force = false;
+    app.add_flag("--force", force,
+        "Overwrite existing output files instead of skipping them.");
+
+    CLI11_PARSE(app, argc, argv);
+
+    // Resolve effective paths (command-line overrides compile-time defaults)
+    std::filesystem::path eff_datapath{data_path_arg};
+    std::filesystem::path eff_output{output_arg};
+    std::filesystem::path eff_check{check_arg};
+
+    // Validate directories
+    for (auto [label, path] : {
+        std::pair{"data path", eff_datapath},
+        std::pair{"output directory", eff_output},
+        std::pair{"check directory", eff_check}
+    }) {
+        if (!std::filesystem::exists(path)) {
+            std::cerr << "Error: " << label << " does not exist: " << path << "\n";
+            return EXIT_FAILURE;
         }
     }
-    pool.join();
+
+    std::filesystem::path fluids_dir = eff_datapath / "dev" / "fluids";
+    if (!std::filesystem::exists(fluids_dir)) {
+        std::cerr << "Error: fluids directory does not exist: " << fluids_dir << "\n";
+        return EXIT_FAILURE;
+    }
+
+    // Build the set of fluids to skip
+    std::set<std::string> skip_set(skip_arg.begin(), skip_arg.end());
+
+    // Collect fluid names to process
+    std::vector<std::string> fluids_to_run;
+
+    if (!fluids_arg.empty()) {
+        // Explicit list provided on the command line
+        for (auto& f : fluids_arg) {
+            if (skip_set.count(f)) {
+                std::cout << "Skipping (skip list): " << f << "\n";
+                continue;
+            }
+            fluids_to_run.push_back(f);
+        }
+    } else {
+        // Scan the data directory
+        for (auto const& dir_entry : std::filesystem::directory_iterator{fluids_dir}) {
+            if (!dir_entry.is_regular_file()) { continue; }
+            if (dir_entry.path().extension() != ".json") { continue; }
+            auto stem = dir_entry.path().stem().string();
+            if (skip_set.count(stem)) { continue; }
+            fluids_to_run.push_back(stem);
+        }
+    }
+
+    if (fluids_to_run.empty()) {
+        std::cerr << "No fluids to process.\n";
+        return EXIT_FAILURE;
+    }
+
+    // Build a job lambda for each fluid
+    auto make_job = [&](const std::string& fluid) {
+        return [fluid, &eff_output, &eff_check, &mode, force]() {
+            auto outfile   = eff_output / (fluid + "_exps.json");
+            auto checkfile = eff_check  / (fluid + "_check.json");
+            try {
+                if (mode == "build" || mode == "both") {
+                    if (force || !std::filesystem::exists(outfile)) {
+                        std::cout << "Building -> " << outfile.filename().string() << "\n";
+                        build_superancillaries(fluid, outfile);
+                    } else {
+                        std::cout << "Skipping (exists): " << outfile.filename().string() << "\n";
+                    }
+                }
+                if (mode == "check" || mode == "both") {
+                    if (force || !std::filesystem::exists(checkfile)) {
+                        std::cout << "Checking -> " << checkfile.filename().string() << "\n";
+                        check_superancillaries(fluid, outfile, checkfile);
+                    } else {
+                        std::cout << "Skipping (exists): " << checkfile.filename().string() << "\n";
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[" << fluid << "]: " << e.what() << "\n";
+            }
+        };
+    };
+
+    if (nthreads > 0) {
+        boost::asio::thread_pool pool(static_cast<std::size_t>(nthreads));
+        for (auto& fluid : fluids_to_run) {
+            std::cout << "Submitting: " << fluid << "\n";
+            boost::asio::post(pool, make_job(fluid));
+        }
+        pool.join();
+    } else {
+        // Serial execution
+        for (auto& fluid : fluids_to_run) {
+            make_job(fluid)();
+        }
+    }
+
     return EXIT_SUCCESS;
 }
