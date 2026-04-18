@@ -569,11 +569,51 @@ void build_superancillaries(const std::string &fluid, const std::filesystem::pat
         { "gas_constant / J/mol/K", R }
     };
     
+    // Prune non-monotone pressure intervals that can arise from poor VLE convergence
+    // very close to the critical point.  A pressure interval is flagged as bad if its
+    // minimum sampled value is lower than the last good interval's maximum pressure
+    // (i.e. the function has "gone backwards"), which would make the inverse T(p) ill-posed.
+    // We scan from the lowest-temperature interval upward; the first bad interval and
+    // everything above it is dropped from all three property arrays.
+    {
+        int first_bad = static_cast<int>(exps[0].size()); // default: keep everything
+        double p_running_max = -1.0;
+        const int Ncheck = 200; // sample points per interval for the monotonicity test
+        for (int j = 0; j < static_cast<int>(exps[2].size()); ++j) {
+            auto& expp = exps[2][j];
+            double pmin_j = expp.y_Clenshaw(expp.xmin());
+            double pmax_j = expp.y_Clenshaw(expp.xmax());
+            bool nonmono = false;
+            // Check interior of the interval
+            for (int k = 0; k <= Ncheck; ++k) {
+                double T_k = expp.xmin() + (expp.xmax() - expp.xmin()) * k / Ncheck;
+                double p_k = expp.y_Clenshaw(T_k);
+                if (p_k < p_running_max - 1.0) { // allow 1 Pa tolerance for rounding
+                    nonmono = true;
+                    break;
+                }
+                p_running_max = std::max(p_running_max, p_k);
+            }
+            if (nonmono) {
+                first_bad = j;
+                break;
+            }
+        }
+        if (first_bad < static_cast<int>(exps[0].size())) {
+            std::cout << "Pruning " << (exps[0].size() - first_bad)
+                      << " non-monotone near-critical interval(s) starting at index "
+                      << first_bad << " (T=" << exps[0][first_bad].xmin() << " K)\n";
+            for (auto& prop_exps : exps) {
+                prop_exps.erase(prop_exps.begin() + first_bad, prop_exps.end());
+            }
+        }
+    }
+
     // Collect all the expansions
     nlohmann::json jexpansionsrhoL = nlohmann::json::array(),
                    jexpansionsrhoV = nlohmann::json::array(),
                    jexpansionsp = nlohmann::json::array();
-    
+
     for (auto j = 0; j < exps[0].size(); ++j) {
         auto& exrhoL = exps[0][j];
         auto& exrhoV = exps[1][j];
