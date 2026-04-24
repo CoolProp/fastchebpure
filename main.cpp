@@ -16,8 +16,8 @@ extern const std::filesystem::path output_prefix;
 extern const std::filesystem::path check_destination;
 
 // Prototypes for builder, checker, injector
-void build_superancillaries(const std::string&, const std::filesystem::path&);
-void check_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&);
+void build_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&);
+void check_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&);
 void inject_superancillary(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&, bool);
 
 int main(int argc, char** argv){
@@ -146,7 +146,7 @@ int main(int argc, char** argv){
                 if (do_fit) {
                     if (force || !std::filesystem::exists(outfile)) {
                         std::cout << "Building -> " << outfile.filename().string() << "\n";
-                        build_superancillaries(fluid, outfile);
+                        build_superancillaries(fluid, outfile, eff_datapath);
                     } else {
                         std::cout << "Skipping (exists): " << outfile.filename().string() << "\n";
                     }
@@ -154,7 +154,7 @@ int main(int argc, char** argv){
                 if (do_check) {
                     if (force || !std::filesystem::exists(checkfile)) {
                         std::cout << "Checking -> " << checkfile.filename().string() << "\n";
-                        check_superancillaries(fluid, outfile, checkfile);
+                        check_superancillaries(fluid, outfile, checkfile, eff_datapath);
                     } else {
                         std::cout << "Skipping (exists): " << checkfile.filename().string() << "\n";
                     }

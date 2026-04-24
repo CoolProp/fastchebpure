@@ -261,9 +261,9 @@ auto aggressively_solve_pure_critical(const Model& model, double Tcrit0, double 
  
  \note It is thread-safe, so can be run in parallel
  */
-void build_superancillaries(const std::string &fluid, const std::filesystem::path &ofpath){
-    const std::filesystem::path fluid_json_path = teqp_datapath / "dev" / "fluids" / (fluid + ".json");
-    auto model = teqp::build_multifluid_model({ fluid_json_path.string()}, teqp_datapath.string());
+void build_superancillaries(const std::string &fluid, const std::filesystem::path &ofpath, const std::filesystem::path &datapath){
+    const std::filesystem::path fluid_json_path = datapath / "dev" / "fluids" / (fluid + ".json");
+    auto model = teqp::build_multifluid_model({ fluid_json_path.string()}, datapath.string());
 
     // Build conventional ancillaries
     auto build_ancillaries = [](const auto& c, double Tctrue, double rhoctrue) {
@@ -660,9 +660,9 @@ void build_superancillaries(const std::string &fluid, const std::filesystem::pat
  \param input_file_path The path to the superancillaries to be loaded from, in JSON format
  \param outfile The path to the file to be written by this file
  */
-void check_superancillaries(const std::string& fluid, const std::filesystem::path& input_file_path, const std::filesystem::path& outfile) {
-    const std::filesystem::path fluid_json_path = teqp_datapath / "dev" / "fluids" / (fluid + ".json");
-    auto model = teqp::build_multifluid_model({ fluid_json_path.string()}, teqp_datapath.string());
+void check_superancillaries(const std::string& fluid, const std::filesystem::path& input_file_path, const std::filesystem::path& outfile, const std::filesystem::path& datapath) {
+    const std::filesystem::path fluid_json_path = datapath / "dev" / "fluids" / (fluid + ".json");
+    auto model = teqp::build_multifluid_model({ fluid_json_path.string()}, datapath.string());
 
     auto get_collection = [](const std::filesystem::path & expansion_file) {
         const nlohmann::json jfile = teqp::load_a_JSON_file(expansion_file.string());
