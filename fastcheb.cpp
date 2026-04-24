@@ -742,7 +742,8 @@ void check_superancillaries(const std::string& fluid, const std::filesystem::pat
                 {"rho''(mp) / mol/m^3", rhovec[1]},
                 {"rho''(SA)/rho''(mp)", rhoSAV/rhovec[1]},
                 {"p(mp) / Pa", pmp},
-                {"p(SA) / Pa", pSA}
+                {"p(SA) / Pa", pSA},
+                {"p(SA)/p(mp)", pSA/pmp}
             });
         }
         catch (FailedIteration& f) {
@@ -795,7 +796,8 @@ void inject_superancillary(const std::string& fluid,
                            const std::filesystem::path& exps_path,
                            const std::filesystem::path& check_path,
                            const std::filesystem::path& fluid_json_path,
-                           bool force)
+                           bool force,
+                           const std::vector<double>& thetas)
 {
     auto require = [&](const std::filesystem::path& p, const std::string& what) {
         if (!std::filesystem::exists(p)) {
@@ -844,10 +846,58 @@ void inject_superancillary(const std::string& fluid,
             ". Run `fitcheb fit -f " + fluid + "` to regenerate, or pass --force to inject anyway.");
     }
 
+    // Downsample check_points to (at most) len(thetas) rows, one per Theta value.
+    // Theta = (Tcrittrue - T) / Tcrittrue; we pick the row whose T is closest to
+    // Tcrittrue * (1 - theta) for each requested theta — mirrors pick_rows() from
+    // CoolProp/dev/scripts/inject_superanc_check_points.py.
+    const auto& all_data = check.at("data");
+    double Tcrittrue_check = check.at("meta").at("Tcrittrue / K").get<double>();
+    const std::size_t N = all_data.size();
+
+    // Collect temperatures for nearest-neighbour search
+    std::vector<double> Ts;
+    Ts.reserve(N);
+    for (const auto& row : all_data) {
+        Ts.push_back(row.at("T / K").get<double>());
+    }
+
+    auto nearest_idx = [&](double target) -> std::size_t {
+        std::size_t best = 0;
+        double best_dist = std::abs(Ts[0] - target);
+        for (std::size_t i = 1; i < N; ++i) {
+            double d = std::abs(Ts[i] - target);
+            if (d < best_dist) { best_dist = d; best = i; }
+        }
+        return best;
+    };
+
+    nlohmann::json check_points = nlohmann::json::array();
+    for (double theta : thetas) {
+        double T_target = Tcrittrue_check * (1.0 - theta);
+        const auto& row = all_data[nearest_idx(T_target)];
+
+        // Only pass through the keys that CoolProp's loader expects.
+        // If the check file pre-dates the p(SA)/p(mp) column (Bug 3), derive it.
+        nlohmann::json pt;
+        pt["T / K"]                  = row.at("T / K");
+        pt["p(mp) / Pa"]             = row.at("p(mp) / Pa");
+        if (row.contains("p(SA)/p(mp)")) {
+            pt["p(SA)/p(mp)"]        = row.at("p(SA)/p(mp)");
+        } else {
+            pt["p(SA)/p(mp)"]        = row.at("p(SA) / Pa").get<double>()
+                                       / row.at("p(mp) / Pa").get<double>();
+        }
+        pt["rho'(mp) / mol/m^3"]     = row.at("rho'(mp) / mol/m^3");
+        pt["rho'(SA)/rho'(mp)"]      = row.at("rho'(SA)/rho'(mp)");
+        pt["rho''(mp) / mol/m^3"]    = row.at("rho''(mp) / mol/m^3");
+        pt["rho''(SA)/rho''(mp)"]    = row.at("rho''(SA)/rho''(mp)");
+        check_points.push_back(std::move(pt));
+    }
+
     // Build the SUPERANCILLARY block in deterministic alphabetical order so
     // repeated injects are byte-stable regardless of input file ordering.
     nlohmann::ordered_json sa;
-    sa["check_points"]      = check.at("data");
+    sa["check_points"]      = std::move(check_points);
     sa["crit_anc"]          = exps.at("crit_anc");
     sa["jexpansions_p"]     = exps.at("jexpansions_p");
     sa["jexpansions_rhoL"]  = exps.at("jexpansions_rhoL");
