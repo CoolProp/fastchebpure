@@ -26,6 +26,8 @@ using my_float_mp = boost::multiprecision::number<boost::multiprecision::cpp_bin
 
 #include "ChebTools/ChebTools.h"
 
+#include "eos_hash.hpp"
+
 extern const std::filesystem::path teqp_datapath{ "../externals/CoolProp" };
 extern const std::filesystem::path output_prefix{"../output/"};
 extern const std::filesystem::path check_destination{"../outputcheck/"};
@@ -640,6 +642,7 @@ void build_superancillaries(const std::string &fluid, const std::filesystem::pat
         {"jexpansions_rhoL", jexpansionsrhoL},
         {"jexpansions_rhoV", jexpansionsrhoV},
         {"jexpansions_p", jexpansionsp},
+        {"source_eos_hash", eos_fnv1a_hex(j.at("EOS")[0])},
     };
     // Stream the output into the file you specified
     std::ofstream ofs(ofpath); ofs << jo.dump(2);

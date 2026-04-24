@@ -3572,5 +3572,6 @@
     "Ttriple / K": 247.985,
     "gas_constant / J/mol/K": 8.314472,
     "rhocrittrue / mol/m^3": 2684.499182463573
-  }
+  },
+  "source_eos_hash": "0ac3ee9cfecb637b"
 }
