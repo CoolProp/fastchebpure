@@ -15,32 +15,37 @@ extern const std::filesystem::path teqp_datapath;
 extern const std::filesystem::path output_prefix;
 extern const std::filesystem::path check_destination;
 
-// Prototype for builder and checker
-void build_superancillaries(const std::string &, const std::filesystem::path &);
-void check_superancillaries(const std::string &, const std::filesystem::path&, const std::filesystem::path&);
+// Prototypes for builder, checker, injector
+void build_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&);
+void check_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&);
+void inject_superancillary(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&, bool);
 
 int main(int argc, char** argv){
 
     CLI::App app{
-        "fastchebpure - build and validate Chebyshev superancillary equations\n"
-        "for the saturation properties of pure fluids.",
+        "fastchebpure - build, validate, and inject Chebyshev superancillary\n"
+        "equations for the saturation properties of pure fluids.\n\n"
+        "Subcommands (run `fitcheb <cmd> --help` for details):\n"
+        "  fit      Fit expansions and write {output}/{fluid}_exps.json\n"
+        "  check    Validate expansions and write {checkdir}/{fluid}_check.json\n"
+        "  inject   Embed expansions + check points into CoolProp dev/fluids/{fluid}.json\n\n"
+        "With no subcommand, `fit` and `check` are run for each selected fluid.",
         "fitcheb"
     };
     app.set_version_flag("--version", "1.0.0");
+    app.require_subcommand(0, 1);
 
-    // --- Fluid selection ---
+    // --- Shared options (defined once on the app; visible to all subcommands) ---
     std::vector<std::string> fluids_arg;
     app.add_option("-f,--fluid", fluids_arg,
         "Fluid(s) to process (stem name without .json, e.g. 'Water').\n"
         "May be specified multiple times. Default: all fluids in the data path.");
 
-    // --- Skip list ---
     std::vector<std::string> skip_arg = {"Air", "SES36"};
     app.add_option("-s,--skip", skip_arg,
         "Fluid(s) to skip. Default: Air SES36.")
         ->capture_default_str();
 
-    // --- Paths ---
     std::string data_path_arg = teqp_datapath.string();
     app.add_option("-d,--datapath", data_path_arg,
         "Path to the CoolProp data directory (must contain dev/fluids/).")
@@ -56,32 +61,37 @@ int main(int argc, char** argv){
         "Directory for the validation check JSON files.")
         ->capture_default_str();
 
-    // --- Thread count ---
     int nthreads = 6;
     app.add_option("-j,--jobs", nthreads,
         "Number of parallel worker threads (0 = serial).")
         ->capture_default_str();
 
-    // --- Mode ---
-    std::string mode = "both";
-    app.add_option("-m,--mode", mode,
-        "Operation mode: 'build', 'check', or 'both' (default).")
-        ->capture_default_str()
-        ->check(CLI::IsMember({"build", "check", "both"}));
-
-    // --- Force rebuild ---
     bool force = false;
     app.add_flag("--force", force,
-        "Overwrite existing output files instead of skipping them.");
+        "fit/check: overwrite existing outputs instead of skipping them.\n"
+        "inject: inject even when source_eos_hash disagrees with the destination EOS hash.");
+
+    // --- Subcommands (no per-command options — all options are shared) ---
+    auto* cmd_fit    = app.add_subcommand("fit",    "Fit superancillary expansions and write {fluid}_exps.json.");
+    auto* cmd_check  = app.add_subcommand("check",  "Validate expansions against the EOS and write {fluid}_check.json.");
+    auto* cmd_inject = app.add_subcommand("inject", "Inject expansions + check points into CoolProp dev/fluids/{fluid}.json.");
+    cmd_fit->fallthrough();
+    cmd_check->fallthrough();
+    cmd_inject->fallthrough();
 
     CLI11_PARSE(app, argc, argv);
 
-    // Resolve effective paths (command-line overrides compile-time defaults)
+    // Determine which phases to run. With no subcommand, default to fit+check
+    // (the historical "both" mode); inject is never run implicitly.
+    const bool do_fit    = cmd_fit->parsed()    || (!cmd_check->parsed() && !cmd_inject->parsed());
+    const bool do_check  = cmd_check->parsed()  || (!cmd_fit->parsed()   && !cmd_inject->parsed());
+    const bool do_inject = cmd_inject->parsed();
+
+    // Resolve effective paths
     std::filesystem::path eff_datapath{data_path_arg};
     std::filesystem::path eff_output{output_arg};
     std::filesystem::path eff_check{check_arg};
 
-    // Validate directories
     for (auto [label, path] : {
         std::pair{"data path", eff_datapath},
         std::pair{"output directory", eff_output},
@@ -104,9 +114,7 @@ int main(int argc, char** argv){
 
     // Collect fluid names to process
     std::vector<std::string> fluids_to_run;
-
     if (!fluids_arg.empty()) {
-        // Explicit list provided on the command line
         for (auto& f : fluids_arg) {
             if (skip_set.count(f)) {
                 std::cout << "Skipping (skip list): " << f << "\n";
@@ -115,7 +123,6 @@ int main(int argc, char** argv){
             fluids_to_run.push_back(f);
         }
     } else {
-        // Scan the data directory
         for (auto const& dir_entry : std::filesystem::directory_iterator{fluids_dir}) {
             if (!dir_entry.is_regular_file()) { continue; }
             if (dir_entry.path().extension() != ".json") { continue; }
@@ -130,27 +137,30 @@ int main(int argc, char** argv){
         return EXIT_FAILURE;
     }
 
-    // Build a job lambda for each fluid
     auto make_job = [&](const std::string& fluid) {
-        return [fluid, &eff_output, &eff_check, &mode, force]() {
+        return [fluid, &eff_output, &eff_check, &eff_datapath, do_fit, do_check, do_inject, force]() {
             auto outfile   = eff_output / (fluid + "_exps.json");
             auto checkfile = eff_check  / (fluid + "_check.json");
+            auto fluidfile = eff_datapath / "dev" / "fluids" / (fluid + ".json");
             try {
-                if (mode == "build" || mode == "both") {
+                if (do_fit) {
                     if (force || !std::filesystem::exists(outfile)) {
                         std::cout << "Building -> " << outfile.filename().string() << "\n";
-                        build_superancillaries(fluid, outfile);
+                        build_superancillaries(fluid, outfile, eff_datapath);
                     } else {
                         std::cout << "Skipping (exists): " << outfile.filename().string() << "\n";
                     }
                 }
-                if (mode == "check" || mode == "both") {
+                if (do_check) {
                     if (force || !std::filesystem::exists(checkfile)) {
                         std::cout << "Checking -> " << checkfile.filename().string() << "\n";
-                        check_superancillaries(fluid, outfile, checkfile);
+                        check_superancillaries(fluid, outfile, checkfile, eff_datapath);
                     } else {
                         std::cout << "Skipping (exists): " << checkfile.filename().string() << "\n";
                     }
+                }
+                if (do_inject) {
+                    inject_superancillary(fluid, outfile, checkfile, fluidfile, force);
                 }
             } catch (const std::exception& e) {
                 std::cerr << "[" << fluid << "]: " << e.what() << "\n";
@@ -166,7 +176,6 @@ int main(int argc, char** argv){
         }
         pool.join();
     } else {
-        // Serial execution
         for (auto& fluid : fluids_to_run) {
             make_job(fluid)();
         }
