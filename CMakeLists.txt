@@ -33,3 +33,10 @@ target_include_directories(bench
 )
 target_compile_definitions(bench PUBLIC -DTEQP_MULTIPRECISION_ENABLED)
 target_compile_definitions(bench PUBLIC -DTEQP_MULTICOMPLEX_ENABLED)
+
+add_executable(test_eos_hash test_eos_hash.cpp)
+target_link_libraries(test_eos_hash Catch2WithMain)
+target_include_directories(test_eos_hash
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/externals/teqp/externals/nlohmann_json"
+)
