@@ -18,7 +18,7 @@ extern const std::filesystem::path check_destination;
 // Prototypes for builder, checker, injector
 void build_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&);
 void check_superancillaries(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&);
-void inject_superancillary(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&, bool);
+void inject_superancillary(const std::string&, const std::filesystem::path&, const std::filesystem::path&, const std::filesystem::path&, bool, const std::vector<double>&);
 
 int main(int argc, char** argv){
 
@@ -70,6 +70,12 @@ int main(int argc, char** argv){
     app.add_flag("--force", force,
         "fit/check: overwrite existing outputs instead of skipping them.\n"
         "inject: inject even when source_eos_hash disagrees with the destination EOS hash.");
+
+    std::vector<double> thetas_vec = {0.5, 0.3, 0.1};
+    app.add_option("--thetas", thetas_vec,
+        "Theta = (T_c - T)/T_c values at which to sample check_points (inject only).\n"
+        "Default: 0.5 0.3 0.1  (three points spanning the SA usable range).")
+        ->capture_default_str();
 
     // --- Subcommands (no per-command options — all options are shared) ---
     auto* cmd_fit    = app.add_subcommand("fit",    "Fit superancillary expansions and write {fluid}_exps.json.");
@@ -138,7 +144,7 @@ int main(int argc, char** argv){
     }
 
     auto make_job = [&](const std::string& fluid) {
-        return [fluid, &eff_output, &eff_check, &eff_datapath, do_fit, do_check, do_inject, force]() {
+        return [fluid, &eff_output, &eff_check, &eff_datapath, do_fit, do_check, do_inject, force, &thetas_vec]() {
             auto outfile   = eff_output / (fluid + "_exps.json");
             auto checkfile = eff_check  / (fluid + "_check.json");
             auto fluidfile = eff_datapath / "dev" / "fluids" / (fluid + ".json");
@@ -160,7 +166,7 @@ int main(int argc, char** argv){
                     }
                 }
                 if (do_inject) {
-                    inject_superancillary(fluid, outfile, checkfile, fluidfile, force);
+                    inject_superancillary(fluid, outfile, checkfile, fluidfile, force, thetas_vec);
                 }
             } catch (const std::exception& e) {
                 std::cerr << "[" << fluid << "]: " << e.what() << "\n";
