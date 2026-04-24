@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <sstream>
 #include <filesystem>
 #include <optional>
 #include <numeric>
@@ -771,4 +772,109 @@ void check_superancillaries(const std::string& fluid, const std::filesystem::pat
         {"data", db}
     };
     std::ofstream ofs(outfile); ofs << jo.dump(2);
+}
+
+/**
+\brief Inject the generated superancillary block (and per-temperature check
+       points) back into the CoolProp fluid JSON at EOS[0].SUPERANCILLARY.
+
+ The destination file is loaded with ordered_json so that existing top-level
+ key ordering is preserved (minimal diff). The source_eos_hash in the
+ expansion file must match the current structural hash of EOS[0] — if it
+ does not, the function refuses unless `force` is true. If the rewritten
+ file would be byte-identical to what is already on disk, the file is not
+ touched at all (idempotent, no spurious mtime bumps).
+
+ \param fluid        Fluid stem name (e.g. "Argon")
+ \param exps_path    Path to {fluid}_exps.json from `fitcheb fit`
+ \param check_path   Path to {fluid}_check.json from `fitcheb check`
+ \param fluid_json_path Path to CoolProp's dev/fluids/{fluid}.json (modified in place)
+ \param force        If true, inject even when source_eos_hash disagrees
+ */
+void inject_superancillary(const std::string& fluid,
+                           const std::filesystem::path& exps_path,
+                           const std::filesystem::path& check_path,
+                           const std::filesystem::path& fluid_json_path,
+                           bool force)
+{
+    auto require = [&](const std::filesystem::path& p, const std::string& what) {
+        if (!std::filesystem::exists(p)) {
+            throw std::runtime_error(fluid + ": " + what + " not found at " + p.string());
+        }
+    };
+    require(exps_path,       "expansions file (run `fitcheb fit`)");
+    require(check_path,      "check file (run `fitcheb check`)");
+    require(fluid_json_path, "destination fluid JSON");
+
+    auto read_file = [](const std::filesystem::path& p) {
+        std::ifstream ifs(p);
+        std::stringstream ss; ss << ifs.rdbuf();
+        return ss.str();
+    };
+
+    const std::string exps_text  = read_file(exps_path);
+    const std::string check_text = read_file(check_path);
+    const std::string dest_text  = read_file(fluid_json_path);
+
+    const auto exps  = nlohmann::json::parse(exps_text);
+    const auto check = nlohmann::json::parse(check_text);
+
+    // Preserve destination key ordering by using ordered_json
+    auto dest = nlohmann::ordered_json::parse(dest_text);
+
+    if (!dest.contains("EOS") || !dest["EOS"].is_array() || dest["EOS"].empty()) {
+        throw std::runtime_error(fluid + ": destination has no EOS[0] to inject into");
+    }
+
+    // Hash EOS[0] with a sorted-map json (hash contract requires sorted walk).
+    // Round-trip through dump()/parse() so ordered_json's preserved ordering
+    // does not leak into the hash.
+    const auto eos0_sorted = nlohmann::json::parse(dest["EOS"][0].dump());
+    const std::string current_hash = eos_fnv1a_hex(eos0_sorted);
+    const std::string expected_hash = exps.value("source_eos_hash", std::string{});
+
+    if (expected_hash.empty()) {
+        throw std::runtime_error(fluid + ": expansion file is missing source_eos_hash "
+                                 "(regenerate with a current `fitcheb fit`)");
+    }
+    if (current_hash != expected_hash && !force) {
+        throw std::runtime_error(
+            fluid + ": source_eos_hash mismatch — EOS[0] in " + fluid_json_path.string() +
+            " hashes to " + current_hash + " but expansions were fit against " + expected_hash +
+            ". Run `fitcheb fit -f " + fluid + "` to regenerate, or pass --force to inject anyway.");
+    }
+
+    // Build the SUPERANCILLARY block in deterministic alphabetical order so
+    // repeated injects are byte-stable regardless of input file ordering.
+    nlohmann::ordered_json sa;
+    sa["check_points"]      = check.at("data");
+    sa["crit_anc"]          = exps.at("crit_anc");
+    sa["jexpansions_p"]     = exps.at("jexpansions_p");
+    sa["jexpansions_rhoL"]  = exps.at("jexpansions_rhoL");
+    sa["jexpansions_rhoV"]  = exps.at("jexpansions_rhoV");
+    sa["meta"]              = exps.at("meta");
+    sa["source_eos_hash"]   = force ? current_hash : expected_hash;
+
+    dest["EOS"][0]["SUPERANCILLARY"] = std::move(sa);
+
+    std::string new_text = dest.dump(2);
+    new_text.push_back('\n');  // match `json.dump(indent=2)` + trailing newline convention
+
+    if (new_text == dest_text) {
+        std::cout << "Unchanged: " << fluid_json_path.filename().string() << "\n";
+        return;
+    }
+
+    // Atomic write: temp file + rename
+    auto tmp_path = fluid_json_path;
+    tmp_path += ".tmp";
+    {
+        std::ofstream ofs(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!ofs) throw std::runtime_error(fluid + ": could not open " + tmp_path.string() + " for writing");
+        ofs.write(new_text.data(), static_cast<std::streamsize>(new_text.size()));
+        if (!ofs) throw std::runtime_error(fluid + ": write failed to " + tmp_path.string());
+    }
+    std::filesystem::rename(tmp_path, fluid_json_path);
+    std::cout << "Injected -> " << fluid_json_path.filename().string()
+              << " (hash " << (force ? current_hash : expected_hash) << ")\n";
 }
